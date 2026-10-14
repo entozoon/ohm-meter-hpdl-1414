@@ -14,37 +14,87 @@ const byte wrenPins[] = {5};                       // WR
 
 HPDL1414 hpdl(dataPins, addrPins, wrenPins, sizeof(wrenPins));
 
+// Voltage divider: VSUPPLY -- R_REF -- SENSE_PIN -- R_x -- GND
+//   R_x = R_REF * V / (VSUPPLY - V)
+const byte SENSE_PIN = 1;        // GPIO1 = ADC1_CH0
+const float R_REF = 100000.0;    // reference resistor, ohms
+const float VSUPPLY_MV = 5236.0; // measure your actual 5V rail and put it here
+const float ADC_MAX_MV = 3100.0; // ADC saturates around here at 11dB attenuation
+const float OPEN_MV = min(VSUPPLY_MV, ADC_MAX_MV) - 50.0;
+const int SAMPLES = 64;
+
+float readMilliVolts()
+{
+  uint32_t sum = 0;
+  for (int i = 0; i < SAMPLES; i++)
+    sum += analogReadMilliVolts(SENSE_PIN);
+  return (float)sum / SAMPLES;
+}
+
+// Formats ohms into exactly 4 characters, e.g. " 470", "4.7K", " 47K", "1.2M"
+void formatOhms(float r, char *buf)
+{
+  long ohms = lround(r);
+  if (ohms < 1000)
+  {
+    snprintf(buf, 5, "%4ld", ohms);
+    return;
+  }
+  long tenthsK = lround(r / 100.0);
+  if (tenthsK < 100)
+  {
+    snprintf(buf, 5, "%ld.%ldK", tenthsK / 10, tenthsK % 10);
+    return;
+  }
+  long k = lround(r / 1000.0);
+  if (k < 1000)
+  {
+    snprintf(buf, 5, "%3ldK", k);
+    return;
+  }
+  long tenthsM = lround(r / 100000.0);
+  if (tenthsM < 100)
+    snprintf(buf, 5, "%ld.%ldM", tenthsM / 10, tenthsM % 10);
+  else
+    snprintf(buf, 5, "%3ldM", min(lround(r / 1000000.0), 999L));
+}
+
+void show(const char *text)
+{
+  hpdl.setCursor(0);
+  hpdl.print(text);
+}
+
 void setup()
 {
   Serial.begin(115200);
   hpdl.begin();
   hpdl.clear();
 
-  // Each digit shows its own position, to check digit order
-  hpdl.print("0123");
-  delay(1500);
+  analogReadResolution(12);
+  analogSetPinAttenuation(SENSE_PIN, ADC_11db);
 
-  hpdl.clear();
-  hpdl.print("TEST");
-  delay(1500);
-
-  // All 64 characters, 4 at a time, to check every data line
-  for (char c = ' '; c <= '_'; c += 4)
-  {
-    hpdl.clear();
-    for (byte i = 0; i < 4; i++)
-      hpdl.write(c + i);
-    delay(600);
-  }
+  show("OHMS");
+  delay(800);
 }
 
 void loop()
 {
-  // Counter to show it's alive
-  static uint16_t n = 0;
+  float mv = readMilliVolts();
   char buf[5];
-  snprintf(buf, sizeof(buf), "%4u", n++ % 10000);
-  hpdl.setCursor(0);
-  hpdl.print(buf);
-  delay(100);
+
+  if (mv >= OPEN_MV)
+  {
+    strcpy(buf, "OPEN");
+    Serial.printf("%.0f mV  open\n", mv);
+  }
+  else
+  {
+    float r = R_REF * mv / (VSUPPLY_MV - mv);
+    formatOhms(r, buf);
+    Serial.printf("%.0f mV  %.0f ohms\n", mv, r);
+  }
+
+  show(buf);
+  delay(200);
 }
